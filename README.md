@@ -1,2 +1,2 @@
-# Seattle-AirBnB-in-R
-Seattle AirBnB data analysis in R
+# Seattle-AirBnB---R
+seattle airbnb project in R

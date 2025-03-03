@@ -1,0 +1,107 @@
+---
+title: "AirBnB-Seattle"
+author: "Bruce Zhang"
+date: "2025-03-01"
+output: html_document
+---
+
+
+## Load data
+source - https://insideairbnb.com/get-the-data/
+```{r}
+
+library(tidyverse)
+library(tidymodels)
+library(lubridate)
+library(skimr)
+library(ggridges)
+library(tidytext)
+library(textrecipes)
+```
+```{r}
+file_dir <- "D:/R projects/2024.12 - AirBNB Seattle/2024.12 - Version 1/Source Data/2024.09 - Seattle AirBNB"
+file_name <- list.files(file_dir)
+file_path <-paste0(file_dir,"/listings_detailings_seattle.csv")
+listing_df <- read.csv(file_path)
+```
+
+## Explore data
+```{r}
+
+clean_listing_df <-
+  listing_df %>%
+  select(id,description,neighbourhood_cleansed,neighbourhood_group_cleansed,latitude,longitude,
+         property_type:maximum_nights,review_scores_rating,-bathrooms_text) %>% 
+  mutate(neighbourhood_group_cleansed = as.factor(neighbourhood_group_cleansed),
+         neighbourhood_cleansed = as.factor(neighbourhood_cleansed),
+         property_type = as.factor(property_type),
+         room_type = as.factor(room_type),
+         bedrooms = as.factor (ifelse( bedrooms >4, "5+",bedrooms)),
+         price = as.numeric(str_remove(price,"\\$")))
+
+skim(clean_listing_df)
+```
+* there are <500 missing attributes in several columns, ignore it for now
+
+## Visualise the data
+```{r}
+#histogram of the price
+clean_listing_df %>% 
+  ggplot(aes(price))+
+  geom_histogram(bins = 40)
+
+#number of properties in each region
+clean_listing_df %>% 
+  ggplot(aes(longitude,latitude))+
+  geom_hex(alpha = 0.8, bins = 20)+
+  scale_fill_viridis_c()+
+  labs(fill="count", title = "number of properties in each region")+
+  theme(plot.title = element_text(hjust = 0.5))+  #align the title
+  theme_minimal()
+
+#median price in each region
+clean_listing_df %>% 
+  ggplot(aes(longitude,latitude,z=price))+
+  stat_summary_hex(fun=median, alpha = 0.8, bins = 20)+
+  scale_fill_viridis_c()+
+  labs(fill="median", title = "median price of properties in each region")+
+  theme(plot.title = element_text(hjust = 0.5)) +
+  theme_minimal()
+
+#median price by room type, locations and number of bedrooms
+clean_listing_df %>% 
+  mutate(bedrooms = fct_relevel(bedrooms,"0","1","2","3","4","5+")) %>% 
+  ggplot(aes(x=price, y=bedrooms, fill= stat(x)))+
+  geom_density_ridges_gradient(scale = 1.5, rel_min_height = 0.01)+ 
+  facet_wrap(vars(room_type),scales="free_x")+
+  scale_fill_viridis_c(option ="plasma")+
+  theme_minimal()+
+  theme(legend.position = "None", panel.grid.minor = element_blank())
+```
+## split the data
+```{r}
+
+trsf_data <- clean_listing_df %>%
+  mutate(price = log(price))
+
+set.seed(123)
+
+train_test_split <- trsf_data %>% 
+  initial_split(strata = price)
+
+train_airbnb <- training(train_test_split)
+test_airbnb <- testing(train_test_split)
+
+set.seed(234)
+cvfolds_airbnb <- vfold_cv(train_airbnb,v=5,strata = price) 
+```
+
+## feature engineering
+```{r}
+airbnb_rp <- recipe(price ~ ., data = train_airbnb) %>% 
+  update_role(id,accommodates,minimum_nights,maximum_nights, new_role = "unused") %>% 
+  step_novel(neighbourhood_cleansed) %>% 
+  step_other(neighbourhood_cleansed,threshold = 0.02) %>% 
+  step_tokenize(description)
+``` 
+

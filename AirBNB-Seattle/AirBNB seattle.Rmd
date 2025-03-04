@@ -4,6 +4,9 @@ author: "Bruce Zhang"
 date: "2025-03-01"
 output: html_document
 ---
+```{r}
+install.packages("doParallel")
+```
 
 
 ## Load data
@@ -17,6 +20,11 @@ library(skimr)
 library(ggridges)
 library(tidytext)
 library(textrecipes)
+library(stopwords)
+library(finetune)
+library(doParallel)
+library(xgboost)
+
 ```
 ```{r}
 file_dir <- "D:/R projects/2024.12 - AirBNB Seattle/2024.12 - Version 1/Source Data/2024.09 - Seattle AirBNB"
@@ -99,9 +107,79 @@ cvfolds_airbnb <- vfold_cv(train_airbnb,v=5,strata = price)
 ## feature engineering
 ```{r}
 airbnb_rp <- recipe(price ~ ., data = train_airbnb) %>% 
-  update_role(id,accommodates,minimum_nights,maximum_nights, new_role = "unused") %>% 
-  step_novel(neighbourhood_cleansed) %>% 
-  step_other(neighbourhood_cleansed,threshold = 0.02) %>% 
-  step_tokenize(description)
+  update_role(
+              id,
+              accommodates,
+              minimum_nights,
+              maximum_nights,
+              property_type,
+              neighbourhood_cleansed,
+              new_role = "unused") %>% 
+  step_novel(neighbourhood_group_cleansed) %>% 
+  step_tokenize(description) %>% 
+  step_stopwords(description) %>% 
+  step_tokenfilter(description,max_tokens = 40) %>% 
+  step_tf(description) %>% 
+  step_tokenize(amenities) %>% 
+  step_stopwords(amenities) %>% 
+  step_tokenfilter(amenities,max_tokens = 20) %>% 
+  step_tf(amenities) %>% 
+  step_naomit(all_outcomes()) %>% 
+  step_nzv(all_predictors()) %>% 
+  step_dummy(all_nominal_predictors(),one_hot = TRUE)
 ``` 
+
+## build a model
+```{r}
+xgb_model <- 
+  boost_tree(
+    trees = 1000,
+    tree_depth = tune(),
+    min_n = tune(),
+    mtry = tune(),
+    sample_size = tune(),
+    learn_rate = tune()
+    ) %>%
+  set_engine("xgboost") %>% 
+  set_mode("regression")
+```
+```{r}
+xgb_workflow <- workflow(airbnb_rp,xgb_model)
+
+```
+```{r}
+xgb_grid <- 
+  grid_space_filling(
+    tree_depth(range = c(5, 10)),       # Tree depth
+    min_n(range = c(10, 40)),           # Minimum node size
+    mtry(range = c(5, 40)),             # Number of predictors per split
+    sample_prop(range = c(0.5, 1.0)),   # Proportion of data sampled
+    learn_rate(range = c(0.01,0.1)),    # Learning rate for boosting models
+    size = 30                           # Number of parameter sets
+)
+```
+
+## train model and tune hyperparameters
+```{r}
+
+doParallel::registerDoParallel()
+
+set.seed(234)
+xgb_trained <- tune_race_anova(
+                                xgb_workflow,
+                                cvfolds_airbnb,
+                                grid = xgb_grid,
+                                metrics = metric_set(rmse),
+                                control = control_race(verbose_elim = TRUE)
+                               )
+
+xgb_trained
+```
+
+```{r}
+view(xgb_trained)
+```
+
+
+
 
